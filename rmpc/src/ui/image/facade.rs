@@ -92,15 +92,21 @@ impl AlbumArtFacade {
     }
 
     pub fn show(&mut self, data: impl Into<Arc<Vec<u8>>>, ctx: &Ctx) -> Result<()> {
+        let data = data.into();
+        if self.is_showing {
+            if let Some(curr) = &self.current_album_art {
+                if Arc::ptr_eq(curr, &data) || **curr == *data {
+                    return Ok(());
+                }
+            }
+        }
         self.is_showing = true;
+        self.current_album_art = Some(Arc::clone(&data));
 
         let max_size = ctx.config.album_art.max_size_px;
         let halign = ctx.config.album_art.horizontal_align;
         let valign = ctx.config.album_art.vertical_align;
         let size = self.last_size;
-
-        let data = data.into();
-        self.current_album_art = Some(Arc::clone(&data));
 
         self.request_queue.push(Arc::clone(&data));
         if self.request_queue.len() > 1 {

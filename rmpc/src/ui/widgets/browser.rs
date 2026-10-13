@@ -17,6 +17,7 @@ pub enum BrowserArea {
     Current = 1,
     Preview = 2,
     Scrollbar = 3,
+    PreviewArt = 4,
 }
 
 #[derive(Debug)]
@@ -73,16 +74,45 @@ where
 
         let current = state.current().to_list_items(song_format, ctx);
 
-        let [previous_area, current_area, preview_area] = *Layout::horizontal([
-            Constraint::Percentage(config.theme.column_widths[0]),
-            Constraint::Percentage(config.theme.column_widths[1]),
-            Constraint::Percentage(config.theme.column_widths[2]),
-        ])
-        .split(area) else {
-            return;
+        let has_previous = state.previous().is_some();
+        let (previous_area, current_area, preview_full_area) = if has_previous {
+            let [prev, curr, prevw] = *Layout::horizontal([
+                Constraint::Percentage(config.theme.column_widths[0]),
+                Constraint::Percentage(config.theme.column_widths[1]),
+                Constraint::Percentage(config.theme.column_widths[2]),
+            ])
+            .split(area) else {
+                return;
+            };
+            (prev, curr, prevw)
+        } else {
+            let [curr, prevw] = *Layout::horizontal([
+                Constraint::Percentage(
+                    config.theme.column_widths[0] + config.theme.column_widths[1],
+                ),
+                Constraint::Percentage(config.theme.column_widths[2]),
+            ])
+            .split(area) else {
+                return;
+            };
+            (Rect::default(), curr, prevw)
         };
 
-        self.areas[BrowserArea::Preview] = preview_area;
+        let (preview_list_area, preview_art_area) =
+            if preview_full_area.height >= 8 && preview_full_area.width >= 8 {
+                let split = Layout::vertical([
+                    Constraint::Percentage(50),
+                    Constraint::Percentage(50),
+                ])
+                .split(preview_full_area);
+                (split[0], split[1])
+            } else {
+                (preview_full_area, Rect::default())
+            };
+
+        self.areas[BrowserArea::Preview] = preview_list_area;
+        self.areas[BrowserArea::PreviewArt] = preview_art_area;
+
         if config.theme.column_widths[2] > 0 {
             let result = if let Some(current) = state.current().selected()
                 && current.is_file()
@@ -111,7 +141,7 @@ where
                 });
                 if let Some(next) = state.next_mut() {
                     next.state
-                        .set_content_and_viewport_len(items.len(), previous_area.height.into());
+                        .set_content_and_viewport_len(items.len(), preview_list_area.height.into());
                 }
                 items
             } else {
@@ -119,11 +149,12 @@ where
             };
 
             let preview = List::new(result).style(config.as_text_style());
-            ratatui::widgets::Widget::render(preview, preview_area, buf);
+            ratatui::widgets::Widget::render(preview, preview_list_area, buf);
         }
 
         if let Some(previous) = state.previous_mut()
             && config.theme.column_widths[0] > 0
+            && previous_area.width > 0
         {
             let items = previous.to_list_items(song_format, ctx);
             let title = previous.filter_text(previous_area.width, ctx);

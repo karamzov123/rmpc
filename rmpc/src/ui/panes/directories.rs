@@ -21,7 +21,10 @@ use crate::{
         dir_or_song::{DirOrSong, LsInfoEntryExt as _},
         dirstack::DirStack,
         input::InputResultEvent,
-        widgets::browser::{Browser, BrowserArea},
+        widgets::{
+            browser::{Browser, BrowserArea},
+            hover_art::HoverAlbumArt,
+        },
     },
 };
 
@@ -29,6 +32,7 @@ use crate::{
 pub struct DirectoriesPane {
     stack: DirStack<DirOrSong, ListState>,
     browser: Browser<DirOrSong>,
+    hover_art: HoverAlbumArt,
     initialized: bool,
 }
 
@@ -36,8 +40,13 @@ const INIT: &str = "init";
 const FETCH_DATA: &str = "fetch_data";
 
 impl DirectoriesPane {
-    pub fn new(_ctx: &Ctx) -> Self {
-        Self { stack: DirStack::default(), browser: Browser::new(), initialized: false }
+    pub fn new(ctx: &Ctx) -> Self {
+        Self {
+            stack: DirStack::default(),
+            browser: Browser::new(),
+            hover_art: HoverAlbumArt::new(PaneType::Directories, ctx),
+            initialized: false,
+        }
     }
 }
 
@@ -45,7 +54,46 @@ impl Pane for DirectoriesPane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> anyhow::Result<()> {
         self.browser.render(area, frame.buffer_mut(), &mut self.stack, ctx);
 
+        let hovered_file = if self.stack.previous().is_none() {
+            ctx.current_song().map(|s| s.file.clone())
+        } else {
+            match self.stack.current().selected() {
+                Some(DirOrSong::Song(s)) => {
+                    if s.file.is_empty() {
+                        ctx.current_song().map(|s| s.file.clone())
+                    } else {
+                        Some(s.file.clone())
+                    }
+                }
+                Some(DirOrSong::Dir { .. }) => {
+                    if let Some(items) = self.stack.next_dir_items() {
+                        items
+                            .iter()
+                            .find_map(|item| match item {
+                                DirOrSong::Song(s) if !s.file.is_empty() => Some(s.file.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| ctx.current_song().map(|s| s.file.clone()))
+                    } else {
+                        ctx.current_song().map(|s| s.file.clone())
+                    }
+                }
+                None => ctx.current_song().map(|s| s.file.clone()),
+            }
+        };
+
+        let art_area = self.browser.areas[BrowserArea::PreviewArt];
+        self.hover_art.update_hover(hovered_file, art_area, true, ctx)?;
+
         Ok(())
+    }
+
+    fn on_hide(&mut self, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_hide(ctx)
+    }
+
+    fn resize(&mut self, _area: Rect, ctx: &Ctx) -> Result<()> {
+        self.hover_art.resize(self.browser.areas[BrowserArea::PreviewArt], ctx)
     }
 
     fn before_show(&mut self, ctx: &Ctx) -> Result<()> {
@@ -71,7 +119,8 @@ impl Pane for DirectoriesPane {
         Ok(())
     }
 
-    fn on_event(&mut self, event: &mut UiEvent, _is_visible: bool, ctx: &Ctx) -> Result<()> {
+    fn on_event(&mut self, event: &mut UiEvent, is_visible: bool, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_event(event, is_visible, ctx)?;
         match event {
             UiEvent::Database => {
                 let sort = ctx.config.directories_sort.clone();
@@ -120,9 +169,10 @@ impl Pane for DirectoriesPane {
         &mut self,
         id: &'static str,
         data: MpdQueryResult,
-        _is_visible: bool,
+        is_visible: bool,
         ctx: &Ctx,
     ) -> Result<()> {
+        self.hover_art.on_query_finished(id, &data, is_visible, ctx)?;
         match (id, data) {
             (FETCH_DATA, MpdQueryResult::DirOrSong { data, path }) => {
                 let Some(path) = path else {

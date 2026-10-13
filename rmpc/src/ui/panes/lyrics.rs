@@ -3,6 +3,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::Text,
+    widgets::Paragraph,
 };
 
 use super::Pane;
@@ -52,7 +53,35 @@ fn align_text(text: Text, alignment: Alignment) -> Text {
 
 impl Pane for LyricsPane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()> {
-        let Some(lrc) = &self.current_lyrics else { return Ok(()) };
+        let render_no_lyrics = |frame: &mut Frame| {
+            if area.height == 0 || area.width == 0 {
+                return;
+            }
+            let placeholder = Paragraph::new("<no lyrics>")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(ctx.config.as_text_style());
+            let middle_row = area.height.saturating_sub(1) / 2;
+            let areas = Layout::vertical([
+                Constraint::Length(middle_row),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .split(area);
+            if areas.len() > 1 {
+                frame.render_widget(placeholder, areas[1]);
+            }
+        };
+
+        let Some(lrc) = &self.current_lyrics else {
+            render_no_lyrics(frame);
+            return Ok(());
+        };
+
+        if lrc.lines.is_empty() {
+            render_no_lyrics(frame);
+            return Ok(());
+        }
+
         let offset = ctx.config.lyrics_offset;
 
         let elapsed = ctx.status.elapsed;

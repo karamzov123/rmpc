@@ -26,19 +26,22 @@ impl<S: State> StringCompareBuilder<S> {
 }
 
 fn strip_the(input: &str) -> &str {
-    if input.len() < 4 {
-        return input;
+    let mut s = input;
+    if s.len() >= 4 {
+        if let Some(prefix) = s.get(..4) {
+            if prefix.eq_ignore_ascii_case("the ") {
+                s = &s[4..];
+            }
+        }
     }
-
-    let Some(s) = input.get(..4) else {
-        return input;
-    };
-
-    if s == "THE " || s == "the " || s == "The " {
-        return &input[4..];
+    if s.len() >= 5 {
+        if let Some(suffix) = s.get(s.len() - 5..) {
+            if suffix.eq_ignore_ascii_case(", the") {
+                s = &s[..s.len() - 5];
+            }
+        }
     }
-
-    return input;
+    s
 }
 
 #[allow(unused)]

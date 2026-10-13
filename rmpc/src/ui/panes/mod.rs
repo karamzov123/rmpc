@@ -193,12 +193,32 @@ impl<'panes> PaneContainer<'panes> {
             logs: LogsPane::new(),
             directories: DirectoriesPane::new(ctx),
             albums: TagBrowserPane::new(
-                vec![BrowserTagConfig {
-                    group_by: vec![vec![SongProperty::Album]],
-                    sort_by: None,
-                    format: vec![],
-                    skip: CollapseLevel::default(),
-                }],
+                vec![
+                    BrowserTagConfig {
+                        group_by: vec![vec![SongProperty::Artist]],
+                        sort_by: None,
+                        format: vec![],
+                        skip: CollapseLevel::default(),
+                    },
+                    BrowserTagConfig {
+                        group_by: match display_mode {
+                            AlbumDisplayMode::SplitByDate => {
+                                vec![vec![SongProperty::Album], date_tags.clone()]
+                            }
+                            AlbumDisplayMode::NameOnly => {
+                                vec![vec![SongProperty::Album]]
+                            }
+                        },
+                        sort_by: match sort_by {
+                            AlbumSortMode::Name => None,
+                            AlbumSortMode::Date => {
+                                Some(vec![date_tags.clone(), vec![SongProperty::Album]])
+                            }
+                        },
+                        format: album_format.clone().into(),
+                        skip: CollapseLevel::default(),
+                    },
+                ],
                 PaneType::Albums,
                 ctx,
             ),

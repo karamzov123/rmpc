@@ -32,7 +32,10 @@ use crate::{
         dirstack::{DirStack, DirStackItem, Path, WalkDirStackItem},
         input::InputResultEvent,
         song_ext::SongExt,
-        widgets::browser::{Browser, BrowserArea},
+        widgets::{
+            browser::{Browser, BrowserArea},
+            hover_art::HoverAlbumArt,
+        },
     },
 };
 
@@ -42,6 +45,7 @@ pub struct TagBrowserPane {
     tags: Vec<BrowserTagConfig>,
     target_pane: PaneType,
     browser: Browser<DirOrSong>,
+    hover_art: HoverAlbumArt,
     initialized: bool,
 }
 
@@ -57,12 +61,13 @@ struct SongGroup {
 }
 
 impl TagBrowserPane {
-    pub fn new(tags: Vec<BrowserTagConfig>, target_pane: PaneType, _ctx: &Ctx) -> Self {
+    pub fn new(tags: Vec<BrowserTagConfig>, target_pane: PaneType, ctx: &Ctx) -> Self {
         Self {
             tags,
-            target_pane,
+            target_pane: target_pane.clone(),
             stack: DirStack::default(),
             browser: Browser::new(),
+            hover_art: HoverAlbumArt::new(target_pane, ctx),
             initialized: false,
         }
     }
@@ -309,7 +314,46 @@ impl Pane for TagBrowserPane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()> {
         self.browser.render(area, frame.buffer_mut(), &mut self.stack, ctx);
 
+        let hovered_file = if self.target_pane == PaneType::Artists && self.stack.previous().is_none() {
+            ctx.current_song().map(|s| s.file.clone())
+        } else {
+            match self.stack.current().selected() {
+                Some(DirOrSong::Song(s)) => {
+                    if s.file.is_empty() {
+                        ctx.current_song().map(|s| s.file.clone())
+                    } else {
+                        Some(s.file.clone())
+                    }
+                }
+                Some(DirOrSong::Dir { .. }) => {
+                    if let Some(items) = self.stack.next_dir_items() {
+                        items
+                            .iter()
+                            .find_map(|item| match item {
+                                DirOrSong::Song(s) if !s.file.is_empty() => Some(s.file.clone()),
+                                _ => None,
+                            })
+                            .or_else(|| ctx.current_song().map(|s| s.file.clone()))
+                    } else {
+                        ctx.current_song().map(|s| s.file.clone())
+                    }
+                }
+                None => ctx.current_song().map(|s| s.file.clone()),
+            }
+        };
+
+        let art_area = self.browser.areas[BrowserArea::PreviewArt];
+        self.hover_art.update_hover(hovered_file, art_area, true, ctx)?;
+
         Ok(())
+    }
+
+    fn on_hide(&mut self, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_hide(ctx)
+    }
+
+    fn resize(&mut self, _area: Rect, ctx: &Ctx) -> Result<()> {
+        self.hover_art.resize(self.browser.areas[BrowserArea::PreviewArt], ctx)
     }
 
     fn before_show(&mut self, ctx: &Ctx) -> Result<()> {
@@ -321,7 +365,8 @@ impl Pane for TagBrowserPane {
         Ok(())
     }
 
-    fn on_event(&mut self, event: &mut UiEvent, _is_visible: bool, ctx: &Ctx) -> Result<()> {
+    fn on_event(&mut self, event: &mut UiEvent, is_visible: bool, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_event(event, is_visible, ctx)?;
         match event {
             UiEvent::Database => {
                 self.stack = DirStack::default();
@@ -355,9 +400,10 @@ impl Pane for TagBrowserPane {
         &mut self,
         id: &'static str,
         data: MpdQueryResult,
-        _is_visible: bool,
+        is_visible: bool,
         ctx: &Ctx,
     ) -> Result<()> {
+        self.hover_art.on_query_finished(id, &data, is_visible, ctx)?;
         match (id, data) {
             (FETCH_SONGS, MpdQueryResult::SongsList { data, path }) => {
                 let Some(root_path) = path.and_then(|v| v.as_slice().iter().next().cloned()) else {

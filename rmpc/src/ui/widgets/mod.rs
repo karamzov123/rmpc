@@ -3,6 +3,7 @@ use ratatui::prelude::Alignment;
 pub mod browser;
 pub mod button;
 pub mod header;
+pub mod hover_art;
 pub mod input;
 pub mod progress_bar;
 pub mod scan_status;

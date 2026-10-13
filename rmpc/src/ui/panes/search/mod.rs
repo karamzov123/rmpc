@@ -5,8 +5,7 @@ use enum_map::EnumMap;
 use itertools::Itertools;
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    text::Span,
-    widgets::{Block, Borders, List, ListItem, ListState, Padding},
+    widgets::{Block, Borders, List, ListState, Padding},
 };
 use rmpc_mpd::{
     client::Client,
@@ -66,8 +65,10 @@ use crate::{
             select_modal::SelectModal,
         },
         panes::search::inputs::{ActionResult, InputGroups, InputType, TextboxInput},
-        song_ext::SongExt as _,
-        widgets::browser::BrowserArea,
+        widgets::{
+            browser::BrowserArea,
+            hover_art::HoverAlbumArt,
+        },
     },
 };
 
@@ -79,6 +80,7 @@ pub struct SearchPane {
     phase: Phase,
     songs_dir: Dir<Song, ListState>,
     column_areas: EnumMap<BrowserArea, Rect>,
+    hover_art: HoverAlbumArt,
 }
 
 const SEARCH: &str = "search";
@@ -107,6 +109,7 @@ impl SearchPane {
             songs_dir: Dir::default(),
             inputs,
             column_areas: EnumMap::default(),
+            hover_art: HoverAlbumArt::new(PaneType::Search, ctx),
         }
     }
 
@@ -1081,9 +1084,8 @@ impl Pane for SearchPane {
         ctx: &Ctx,
     ) -> anyhow::Result<()> {
         let widths = &ctx.config.theme.column_widths;
-        let [previous_area, current_area_init, preview_area] = *Layout::horizontal([
-            Constraint::Percentage(widths[0]),
-            Constraint::Percentage(widths[1]),
+        let [inputs_col, results_col] = *Layout::horizontal([
+            Constraint::Percentage(widths[0] + widths[1]),
             Constraint::Percentage(widths[2]),
         ])
         .split(area) else {
@@ -1092,75 +1094,73 @@ impl Pane for SearchPane {
 
         frame.render_widget(
             Block::default().borders(Borders::RIGHT).border_style(ctx.config.theme.borders_style),
-            previous_area,
+            inputs_col,
         );
-        frame.render_widget(
-            Block::default().borders(Borders::RIGHT).border_style(ctx.config.theme.borders_style),
-            current_area_init,
-        );
-        let previous_area = Rect {
-            x: previous_area.x,
-            y: previous_area.y,
-            width: previous_area.width.saturating_sub(1),
-            height: previous_area.height,
+        let inputs_area = Rect {
+            x: inputs_col.x,
+            y: inputs_col.y,
+            width: inputs_col.width.saturating_sub(1),
+            height: inputs_col.height,
         };
-        let current_area = Rect {
-            x: current_area_init.x,
-            y: current_area_init.y,
-            width: current_area_init.width.saturating_sub(1),
-            height: current_area_init.height,
+
+        let (songs_area, art_area) = if results_col.height >= 8 && results_col.width >= 8 {
+            let split = Layout::vertical([
+                Constraint::Percentage(50),
+                Constraint::Percentage(50),
+            ])
+            .split(results_col);
+            (split[0], split[1])
+        } else {
+            (results_col, Rect::default())
         };
 
         match self.phase {
             Phase::Search => {
-                self.column_areas[BrowserArea::Current] = current_area;
-                self.inputs.render(current_area, frame.buffer_mut(), ctx);
+                self.column_areas[BrowserArea::Current] = inputs_area;
+                self.column_areas[BrowserArea::Previous] = Rect::default();
+                self.column_areas[BrowserArea::Preview] = songs_area;
+                self.inputs.render(inputs_area, frame.buffer_mut(), ctx);
 
-                // Render only the part of the preview that is actually supposed
-                // to be shown
                 let offset = self.songs_dir.state.offset();
                 let items = self.songs_dir.to_list_items_range(
-                    offset..offset + previous_area.height as usize,
+                    offset..offset + songs_area.height as usize,
                     ctx.config.theme.browser_song_format.0.as_slice(),
                     ctx,
                 );
                 let preview = List::new(items).style(ctx.config.as_text_style());
-                frame.render_widget(preview, preview_area);
+                frame.render_widget(preview, songs_area);
             }
             Phase::BrowseResults => {
-                self.render_song_column(frame, current_area, ctx);
-                self.inputs.render(previous_area, frame.buffer_mut(), ctx);
-                if let Some(song) = self.songs_dir.selected() {
-                    let preview = song.to_preview(
-                        ctx.config.theme.preview_label_style,
-                        ctx.config.theme.preview_metadata_group_style,
-                        ctx,
-                    );
-                    let mut result = Vec::new();
-                    for group in preview {
-                        if let Some(name) = group.name {
-                            let mut item = ListItem::new(name);
-                            if let Some(style) = group.header_style {
-                                item = item.style(style);
-                            }
-                            result.push(item);
-                        }
-                        result.extend(group.items.clone());
-                        result.push(ListItem::new(Span::raw("")));
-                    }
-                    let preview = List::new(result).style(ctx.config.as_text_style());
-                    frame.render_widget(preview, preview_area);
-                }
+                self.column_areas[BrowserArea::Previous] = inputs_area;
+                self.render_song_column(frame, songs_area, ctx);
+                self.inputs.render(inputs_area, frame.buffer_mut(), ctx);
             }
         }
 
-        self.column_areas[BrowserArea::Previous] = previous_area;
-        self.column_areas[BrowserArea::Preview] = preview_area;
+        self.column_areas[BrowserArea::PreviewArt] = art_area;
+
+        let hovered_file = self
+            .songs_dir
+            .selected()
+            .or_else(|| self.songs_dir.items.first())
+            .map(|s| s.file.clone())
+            .or_else(|| ctx.current_song().map(|s| s.file.clone()));
+
+        self.hover_art.update_hover(hovered_file, art_area, true, ctx)?;
 
         Ok(())
     }
 
-    fn on_event(&mut self, event: &mut UiEvent, _is_visible: bool, ctx: &Ctx) -> Result<()> {
+    fn on_hide(&mut self, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_hide(ctx)
+    }
+
+    fn resize(&mut self, _area: Rect, ctx: &Ctx) -> Result<()> {
+        self.hover_art.resize(self.column_areas[BrowserArea::PreviewArt], ctx)
+    }
+
+    fn on_event(&mut self, event: &mut UiEvent, is_visible: bool, ctx: &Ctx) -> Result<()> {
+        self.hover_art.on_event(event, is_visible, ctx)?;
         match event {
             UiEvent::Database => {
                 self.songs_dir = Dir::default();
@@ -1186,9 +1186,10 @@ impl Pane for SearchPane {
         &mut self,
         id: &'static str,
         data: MpdQueryResult,
-        _is_visible: bool,
+        is_visible: bool,
         ctx: &Ctx,
     ) -> Result<()> {
+        self.hover_art.on_query_finished(id, &data, is_visible, ctx)?;
         match (id, data) {
             (SEARCH, MpdQueryResult::SearchResult { data }) => {
                 status_info!("Found {} matching songs", data.len());
