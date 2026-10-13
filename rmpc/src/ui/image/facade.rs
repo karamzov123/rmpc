@@ -13,7 +13,7 @@ use super::{
     ueberzug::{Layer, Ueberzug},
 };
 use crate::{
-    config::album_art::ImageMethod,
+    config::{album_art::ImageMethod, tabs::PaneType},
     ctx::Ctx,
     shared::{events::WorkRequest, macros::status_error, terminal::TERMINAL},
 };
@@ -21,6 +21,7 @@ use crate::{
 #[derive(Debug)]
 pub struct AlbumArtFacade {
     image_backend: ImageBackend,
+    target: Option<PaneType>,
     current_album_art: Option<Arc<Vec<u8>>>,
     default_album_art: Arc<Vec<u8>>,
     last_size: Rect,
@@ -52,7 +53,7 @@ pub enum EncodeData {
 }
 
 impl AlbumArtFacade {
-    pub fn new(ctx: &Ctx) -> Self {
+    pub fn new(target: Option<PaneType>, ctx: &Ctx) -> Self {
         let config = ctx.config.as_ref();
         let image_backend = match config.album_art.method {
             ImageMethod::Kitty => ImageBackend::Kitty(Kitty),
@@ -66,6 +67,7 @@ impl AlbumArtFacade {
 
         Self {
             image_backend,
+            target,
             current_album_art: None,
             last_size: Rect::default(),
             default_album_art: Arc::new(config.theme.default_album_art.to_vec()),
@@ -116,40 +118,55 @@ impl AlbumArtFacade {
 
         match &mut self.image_backend {
             ImageBackend::Kitty(_kitty) => {
-                self.work_tx.send(WorkRequest::ResizeImage(Box::new(move || {
-                    Ok(EncodeData::Kitty(Kitty::create_data(
-                        &data, size, max_size, halign, valign,
-                    )?))
-                })))?;
+                self.work_tx.send(WorkRequest::ResizeImage {
+                    target: self.target.clone(),
+                    resizer: Box::new(move || {
+                        Ok(EncodeData::Kitty(Kitty::create_data(
+                            &data, size, max_size, halign, valign,
+                        )?))
+                    }),
+                })?;
             }
             ImageBackend::Iterm2(_iterm2) => {
-                self.work_tx.send(WorkRequest::ResizeImage(Box::new(move || {
-                    Ok(EncodeData::Iterm2(Iterm2::create_data(
-                        &data, size, max_size, halign, valign,
-                    )?))
-                })))?;
+                self.work_tx.send(WorkRequest::ResizeImage {
+                    target: self.target.clone(),
+                    resizer: Box::new(move || {
+                        Ok(EncodeData::Iterm2(Iterm2::create_data(
+                            &data, size, max_size, halign, valign,
+                        )?))
+                    }),
+                })?;
             }
             ImageBackend::Sixel(_sixel) => {
                 log::debug!("Sending sixel image encode request");
-                self.work_tx.send(WorkRequest::ResizeImage(Box::new(move || {
-                    Ok(EncodeData::Sixel(Sixel::create_data(
-                        &data, size, max_size, halign, valign,
-                    )?))
-                })))?;
+                self.work_tx.send(WorkRequest::ResizeImage {
+                    target: self.target.clone(),
+                    resizer: Box::new(move || {
+                        Ok(EncodeData::Sixel(Sixel::create_data(
+                            &data, size, max_size, halign, valign,
+                        )?))
+                    }),
+                })?;
             }
             ImageBackend::Block(_block) => {
-                self.work_tx.send(WorkRequest::ResizeImage(Box::new(move || {
-                    Ok(EncodeData::Block(Block::create_data(
-                        &data, size, max_size, halign, valign,
-                    )?))
-                })))?;
+                self.work_tx.send(WorkRequest::ResizeImage {
+                    target: self.target.clone(),
+                    resizer: Box::new(move || {
+                        Ok(EncodeData::Block(Block::create_data(
+                            &data, size, max_size, halign, valign,
+                        )?))
+                    }),
+                })?;
             }
             ImageBackend::Ueberzug(_ueberzug) => {
-                self.work_tx.send(WorkRequest::ResizeImage(Box::new(move || {
-                    Ok(EncodeData::Ueberzug(Ueberzug::create_data(
-                        &data, size, max_size, halign, valign,
-                    )?))
-                })))?;
+                self.work_tx.send(WorkRequest::ResizeImage {
+                    target: self.target.clone(),
+                    resizer: Box::new(move || {
+                        Ok(EncodeData::Ueberzug(Ueberzug::create_data(
+                            &data, size, max_size, halign, valign,
+                        )?))
+                    }),
+                })?;
             }
             ImageBackend::None => {}
         }

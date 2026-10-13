@@ -28,7 +28,7 @@ pub struct HoverAlbumArt {
 impl HoverAlbumArt {
     pub fn new(target_pane: PaneType, ctx: &Ctx) -> Self {
         Self {
-            album_art: AlbumArtFacade::new(ctx),
+            album_art: AlbumArtFacade::new(Some(target_pane.clone()), ctx),
             target_pane,
             last_file: None,
             current_area: Rect::default(),
@@ -141,12 +141,18 @@ impl HoverAlbumArt {
 
     pub fn on_event(&mut self, event: &mut UiEvent, is_visible: bool, ctx: &Ctx) -> Result<()> {
         match event {
-            UiEvent::ImageEncoded { data } if is_visible && !self.is_modal_open => {
+            UiEvent::ImageEncoded { target, data }
+                if target.as_ref() == Some(&self.target_pane)
+                    && is_visible
+                    && !self.is_modal_open =>
+            {
                 if !matches!(data, EncodeData::Empty) {
                     self.album_art.display(std::mem::take(data), ctx)?;
                 }
             }
-            UiEvent::ImageEncodeFailed { err } if is_visible => {
+            UiEvent::ImageEncodeFailed { target, err }
+                if target.as_ref() == Some(&self.target_pane) && is_visible =>
+            {
                 self.album_art.image_processing_failed(err, ctx)?;
             }
             UiEvent::ModalOpened if is_visible => {

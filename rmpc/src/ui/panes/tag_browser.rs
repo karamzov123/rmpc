@@ -314,7 +314,10 @@ impl Pane for TagBrowserPane {
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &Ctx) -> Result<()> {
         self.browser.render(area, frame.buffer_mut(), &mut self.stack, ctx);
 
-        let hovered_file = if self.target_pane == PaneType::Artists && self.stack.previous().is_none() {
+        let hovered_file = if (self.target_pane == PaneType::Artists
+            || self.target_pane == PaneType::Albums)
+            && self.stack.previous().is_none()
+        {
             ctx.current_song().map(|s| s.file.clone())
         } else {
             match self.stack.current().selected() {
@@ -325,18 +328,21 @@ impl Pane for TagBrowserPane {
                         Some(s.file.clone())
                     }
                 }
-                Some(DirOrSong::Dir { .. }) => {
-                    if let Some(items) = self.stack.next_dir_items() {
-                        items
-                            .iter()
-                            .find_map(|item| match item {
-                                DirOrSong::Song(s) if !s.file.is_empty() => Some(s.file.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| ctx.current_song().map(|s| s.file.clone()))
-                    } else {
-                        ctx.current_song().map(|s| s.file.clone())
-                    }
+                Some(item @ DirOrSong::Dir { .. }) => {
+                    self.songs_for_item(item)
+                        .find(|s| !s.file.is_empty())
+                        .map(|s| s.file.clone())
+                        .or_else(|| {
+                            if let Some(items) = self.stack.next_dir_items() {
+                                items.iter().find_map(|it| match it {
+                                    DirOrSong::Song(s) if !s.file.is_empty() => Some(s.file.clone()),
+                                    _ => None,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .or_else(|| ctx.current_song().map(|s| s.file.clone()))
                 }
                 None => ctx.current_song().map(|s| s.file.clone()),
             }

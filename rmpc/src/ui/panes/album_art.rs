@@ -4,6 +4,7 @@ use ratatui::{Frame, layout::Rect};
 use super::Pane;
 use crate::{
     MpdQueryResult,
+    config::tabs::PaneType,
     ctx::Ctx,
     shared::{
         album_art::{self, ALBUM_ART},
@@ -21,7 +22,11 @@ pub struct AlbumArtPane {
 
 impl AlbumArtPane {
     pub fn new(ctx: &Ctx) -> Self {
-        Self { album_art: AlbumArtFacade::new(ctx), is_modal_open: false, fetch_needed: false }
+        Self {
+            album_art: AlbumArtFacade::new(Some(PaneType::AlbumArt), ctx),
+            is_modal_open: false,
+            fetch_needed: false,
+        }
     }
 }
 
@@ -116,11 +121,15 @@ impl Pane for AlbumArtPane {
             UiEvent::Exit => {
                 self.album_art.cleanup()?;
             }
-            UiEvent::ImageEncoded { data } => {
-                self.album_art.display(std::mem::take(data), ctx)?;
+            UiEvent::ImageEncoded { target, data } if *target == Some(PaneType::AlbumArt) => {
+                if is_visible && !self.is_modal_open {
+                    self.album_art.display(std::mem::take(data), ctx)?;
+                }
             }
-            UiEvent::ImageEncodeFailed { err } => {
-                self.album_art.image_processing_failed(err, ctx)?;
+            UiEvent::ImageEncodeFailed { target, err } if *target == Some(PaneType::AlbumArt) => {
+                if is_visible {
+                    self.album_art.image_processing_failed(err, ctx)?;
+                }
             }
             _ => {}
         }

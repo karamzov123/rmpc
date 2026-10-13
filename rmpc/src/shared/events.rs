@@ -65,7 +65,10 @@ pub(crate) enum WorkRequest {
         playlist: YtDlpPlaylist,
     },
     Command(Command),
-    ResizeImage(Box<dyn FnOnce() -> Result<EncodeData> + Send + Sync>),
+    ResizeImage {
+        target: Option<PaneType>,
+        resizer: Box<dyn FnOnce() -> Result<EncodeData> + Send + Sync>,
+    },
     LoadAlbumArt {
         file: String,
         loader: std::sync::Arc<Vec<String>>,
@@ -96,6 +99,7 @@ pub(crate) enum WorkDone {
         data: MpdQueryResult,
     },
     ImageResized {
+        target: Option<PaneType>,
         data: Result<EncodeData>,
     },
     SearchYtResults {
