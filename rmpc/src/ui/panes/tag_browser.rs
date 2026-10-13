@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use enum_map::EnumMap;
 use itertools::Itertools;
@@ -47,6 +49,8 @@ pub struct TagBrowserPane {
     browser: Browser<DirOrSong>,
     hover_art: HoverAlbumArt,
     initialized: bool,
+    last_hovered_artist: Option<String>,
+    artist_random_file: Option<String>,
 }
 
 const INIT: &str = "init";
@@ -69,6 +73,8 @@ impl TagBrowserPane {
             browser: Browser::new(),
             hover_art: HoverAlbumArt::new(target_pane, ctx),
             initialized: false,
+            last_hovered_artist: None,
+            artist_random_file: None,
         }
     }
 
@@ -315,11 +321,52 @@ impl Pane for TagBrowserPane {
         self.browser.render(area, frame.buffer_mut(), &mut self.stack, ctx);
 
         let hovered_file = if (self.target_pane == PaneType::Artists
-            || self.target_pane == PaneType::Albums)
+            || self.target_pane == PaneType::Albums
+            || self.target_pane == PaneType::AlbumArtists)
             && self.stack.previous().is_none()
         {
-            ctx.current_song().map(|s| s.file.clone())
+            if let Some(item) = self.stack.current().selected() {
+                let artist_name = item.as_path().to_string();
+                let is_loaded = self.stack.next_dir_items().is_some();
+                if self.last_hovered_artist.as_deref() != Some(&artist_name)
+                    || (self.artist_random_file.is_none() && is_loaded)
+                {
+                    let mut album_files: HashMap<String, String> = HashMap::new();
+                    for s in self.songs_for_item(item) {
+                        if !s.file.is_empty() {
+                            let album_key = s
+                                .metadata
+                                .get("album")
+                                .map(|v| v.last().to_string())
+                                .unwrap_or_else(|| {
+                                    std::path::Path::new(&s.file)
+                                        .parent()
+                                        .and_then(|p| p.to_str())
+                                        .unwrap_or(&s.file)
+                                        .to_string()
+                                });
+                            album_files.entry(album_key).or_insert_with(|| s.file.clone());
+                        }
+                    }
+                    let files: Vec<String> = album_files.into_values().collect();
+                    if !files.is_empty() {
+                        use rand::seq::IndexedRandom;
+                        self.artist_random_file = files.choose(&mut rand::rng()).cloned();
+                        self.last_hovered_artist = Some(artist_name);
+                    } else if is_loaded {
+                        self.artist_random_file = None;
+                        self.last_hovered_artist = Some(artist_name);
+                    }
+                }
+                self.artist_random_file
+                    .clone()
+                    .or_else(|| ctx.current_song().map(|s| s.file.clone()))
+            } else {
+                ctx.current_song().map(|s| s.file.clone())
+            }
         } else {
+            self.last_hovered_artist = None;
+            self.artist_random_file = None;
             match self.stack.current().selected() {
                 Some(DirOrSong::Song(s)) => {
                     if s.file.is_empty() {
@@ -561,7 +608,7 @@ mod tests {
             tabs::CollapseLevel,
             theme::properties::{Property, PropertyKindOrText, SongProperty},
         },
-        tests::fixtures::{config, ctx},
+        tests::fixtures::{config, ctx, terminal},
     };
 
     fn song(
@@ -1455,6 +1502,60 @@ mod tests {
 
             assert_eq!(hovered_idx, Some(0));
             assert!(matches!(&items[..], [Enqueue::File { path }] if *path == hovered));
+        }
+
+        #[rstest]
+        fn artist_hover_selects_and_caches_random_album(
+            mut terminal: ratatui::Terminal<ratatui::backend::TestBackend>,
+            mut ctx: Ctx,
+            config: Config,
+        ) {
+            ctx.config = std::sync::Arc::new(config);
+            let mut pane = TagBrowserPane::new(
+                vec![tag("artist"), album_tag(None, None)],
+                PaneType::Albums,
+                &ctx,
+            );
+            let songs_a = vec![song("album_1", "2020"), song("album_2", "2021")];
+            let songs_b = vec![song("album_3", "2022")];
+            pane.stack.insert(Path::new(), vec![
+                DirOrSong::name_only("artist_a".to_string()),
+                DirOrSong::name_only("artist_b".to_string()),
+            ]);
+            pane.process_songs("artist_a".to_string(), songs_a, &ctx);
+            pane.process_songs("artist_b".to_string(), songs_b, &ctx);
+            pane.stack.current_mut().select_idx(0, 0);
+
+            // First render: artist_a selected
+            terminal
+                .draw(|frame| {
+                    pane.render(frame, Rect::new(0, 0, 80, 24), &ctx).unwrap();
+                })
+                .unwrap();
+
+            assert_eq!(pane.last_hovered_artist.as_deref(), Some("artist_a"));
+            let chosen = pane.artist_random_file.clone();
+            assert!(chosen.is_some());
+            let chosen_str = chosen.unwrap();
+            assert!(chosen_str.contains("album_1") || chosen_str.contains("album_2"));
+
+            // Second render on same artist: selection must be cached / stable
+            terminal
+                .draw(|frame| {
+                    pane.render(frame, Rect::new(0, 0, 80, 24), &ctx).unwrap();
+                })
+                .unwrap();
+            assert_eq!(pane.artist_random_file.as_deref(), Some(chosen_str.as_str()));
+
+            // Move to artist_b
+            pane.stack.current_mut().select_idx(1, 0);
+            terminal
+                .draw(|frame| {
+                    pane.render(frame, Rect::new(0, 0, 80, 24), &ctx).unwrap();
+                })
+                .unwrap();
+            assert_eq!(pane.last_hovered_artist.as_deref(), Some("artist_b"));
+            assert!(pane.artist_random_file.as_ref().unwrap().contains("album_3"));
         }
     }
 }
