@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use enum_map::{Enum, EnumMap, enum_map};
@@ -96,6 +99,9 @@ pub struct QueuePane {
     highlight_id: Id,
     highlight_enabled: bool,
     new_album_indices: HashSet<usize>,
+    last_selected_idx: Option<usize>,
+    cursor_moved_at: Instant,
+    scroll_schedule_id: Id,
 }
 
 #[derive(Debug, Enum)]
@@ -123,6 +129,9 @@ impl QueuePane {
             highlight_id: id::new(),
             highlight_enabled: true,
             new_album_indices: HashSet::new(),
+            last_selected_idx: None,
+            cursor_moved_at: Instant::now(),
+            scroll_schedule_id: id::new(),
         };
 
         s.recalculate_album_indices();
@@ -369,6 +378,11 @@ impl Pane for QueuePane {
         let marked = std::mem::take(self.queue.marked_mut());
         let filter = ctx.input.value(self.queue.filter_buffer_id);
         let selected_idx = self.queue.selected_idx();
+        if selected_idx != self.last_selected_idx {
+            self.last_selected_idx = selected_idx;
+            self.cursor_moved_at = Instant::now();
+        }
+        let elapsed_on_cursor = self.cursor_moved_at.elapsed();
 
         let table = VirtualizedTable::new(&self.queue.items)
             .column_widths(self.column_widths.clone())
@@ -395,13 +409,16 @@ impl Pane for QueuePane {
                     }
                     let format = &formats[i];
 
-                    let mut line = if let Some(speed) = format.scroll_speed {
-                        song.as_line_scrolling(
+                    let mut line = if let Some(speed) = format.scroll_speed
+                        && is_under_cursor
+                    {
+                        song.as_line_bouncing(
                             &format.prop,
                             max_len,
                             &config.theme.format_tag_separator,
                             config.theme.multiple_tag_resolution_strategy,
                             speed,
+                            elapsed_on_cursor,
                             ctx,
                         )
                     } else {
@@ -471,6 +488,13 @@ impl Pane for QueuePane {
                 ),
                 self.areas[Areas::FilterArea],
             );
+        }
+
+        if formats.iter().any(|f| f.scroll_speed.is_some()) && selected_idx.is_some() {
+            ctx.scheduler.schedule_replace(self.scroll_schedule_id, Duration::from_millis(90), |(tx, _)| {
+                tx.send(crate::shared::events::AppEvent::RequestRender)?;
+                Ok(())
+            });
         }
 
         Ok(())

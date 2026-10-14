@@ -2,7 +2,7 @@ use enum_map::{Enum, EnumMap};
 use itertools::Itertools;
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, ListState, Padding},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
 };
 
 use crate::{
@@ -74,28 +74,50 @@ where
 
         let current = state.current().to_list_items(song_format, ctx);
 
-        let has_previous = state.previous().is_some();
-        let (previous_area, current_area, preview_full_area) = if has_previous {
-            let [prev, curr, prevw] = *Layout::horizontal([
+        let is_inside_album = config.theme.column_widths[2] > 0
+            && state.previous().is_some()
+            && (state.current().items.iter().any(|item| item.is_file())
+                || state.current().selected().map_or(false, |item| item.is_file()));
+
+        let icon_width = if config.theme.draw_borders { 4u16 } else { 3u16 };
+
+        let layout_constraints = if is_inside_album {
+            let remaining = area.width.saturating_sub(icon_width);
+            let col1 = remaining / 2;
+            let col2 = remaining.saturating_sub(col1);
+            [
+                Constraint::Length(icon_width),
+                Constraint::Length(col1),
+                Constraint::Length(col2),
+            ]
+        } else if state.previous().is_none() {
+            if config.theme.column_widths[2] == 0 {
+                [
+                    Constraint::Length(0),
+                    Constraint::Percentage(100),
+                    Constraint::Length(0),
+                ]
+            } else {
+                let w1 = config.theme.column_widths[0] + config.theme.column_widths[1];
+                let w2 = config.theme.column_widths[2];
+                [
+                    Constraint::Length(0),
+                    Constraint::Percentage(w1),
+                    Constraint::Percentage(w2),
+                ]
+            }
+        } else {
+            [
                 Constraint::Percentage(config.theme.column_widths[0]),
                 Constraint::Percentage(config.theme.column_widths[1]),
                 Constraint::Percentage(config.theme.column_widths[2]),
-            ])
-            .split(area) else {
-                return;
-            };
-            (prev, curr, prevw)
-        } else {
-            let [curr, prevw] = *Layout::horizontal([
-                Constraint::Percentage(
-                    config.theme.column_widths[0] + config.theme.column_widths[1],
-                ),
-                Constraint::Percentage(config.theme.column_widths[2]),
-            ])
-            .split(area) else {
-                return;
-            };
-            (Rect::default(), curr, prevw)
+            ]
+        };
+
+        let [previous_area, current_area, preview_full_area] =
+            *Layout::horizontal(layout_constraints).split(area)
+        else {
+            return;
         };
 
         let (preview_list_area, preview_art_area) =
@@ -153,46 +175,66 @@ where
         }
 
         if let Some(previous) = state.previous_mut()
-            && config.theme.column_widths[0] > 0
+            && (config.theme.column_widths[0] > 0 || is_inside_album)
             && previous_area.width > 0
         {
-            let items = previous.to_list_items(song_format, ctx);
-            let title = previous.filter_text(previous_area.width, ctx);
-            let prev_state = &mut previous.state;
-            prev_state.set_content_and_viewport_len(items.len(), previous_area.height.into());
+            if is_inside_album {
+                let block = if config.theme.draw_borders {
+                    Block::default()
+                        .borders(Borders::RIGHT)
+                        .border_style(config.as_border_style())
+                        .border_set(LEFT_COLUMN_SYMBOLS)
+                } else {
+                    Block::default()
+                };
+                let inner_block = block.inner(previous_area);
+                self.areas[BrowserArea::Previous] = inner_block;
 
-            let previous = List::new(items).style(config.as_text_style());
-            let mut block = if config.theme.draw_borders {
-                Block::default()
-                    .borders(Borders::RIGHT)
-                    .border_style(config.as_border_style())
-                    .padding(Padding::new(0, column_right_padding, 0, 0))
-                    .border_set(LEFT_COLUMN_SYMBOLS)
+                let dir_symbol = &config.theme.symbols.dir;
+                let icon_span = Span::styled(dir_symbol.clone(), config.theme.preview_label_style);
+                let line = Line::from(vec![Span::raw(" "), icon_span]);
+                let widget = Paragraph::new(line);
+                ratatui::widgets::Widget::render(widget, inner_block, buf);
+                ratatui::widgets::Widget::render(block, previous_area, buf);
             } else {
-                Block::default().padding(Padding::new(0, column_right_padding, 0, 0))
-            };
-            if let Some(title) = title {
-                block = block.title(title);
-            }
+                let items = previous.to_list_items(song_format, ctx);
+                let title = previous.filter_text(previous_area.width, ctx);
+                let prev_state = &mut previous.state;
+                prev_state.set_content_and_viewport_len(items.len(), previous_area.height.into());
 
-            let inner_block = block.inner(previous_area);
-            self.areas[BrowserArea::Previous] = inner_block;
-            ratatui::widgets::StatefulWidget::render(
-                previous,
-                inner_block,
-                buf,
-                prev_state.as_render_state_ref(),
-            );
-            ratatui::widgets::Widget::render(block, previous_area, buf);
-            if let Some(scrollbar) = config.as_styled_scrollbar()
-                && prev_state.content_len().is_some_and(|l| l > 0)
-            {
+                let previous = List::new(items).style(config.as_text_style());
+                let mut block = if config.theme.draw_borders {
+                    Block::default()
+                        .borders(Borders::RIGHT)
+                        .border_style(config.as_border_style())
+                        .padding(Padding::new(0, column_right_padding, 0, 0))
+                        .border_set(LEFT_COLUMN_SYMBOLS)
+                } else {
+                    Block::default().padding(Padding::new(0, column_right_padding, 0, 0))
+                };
+                if let Some(title) = title {
+                    block = block.title(title);
+                }
+
+                let inner_block = block.inner(previous_area);
+                self.areas[BrowserArea::Previous] = inner_block;
                 ratatui::widgets::StatefulWidget::render(
-                    scrollbar,
-                    previous_area.inner(scrollbar_margin),
+                    previous,
+                    inner_block,
                     buf,
-                    prev_state.as_scrollbar_state_ref(),
+                    prev_state.as_render_state_ref(),
                 );
+                ratatui::widgets::Widget::render(block, previous_area, buf);
+                if let Some(scrollbar) = config.as_styled_scrollbar()
+                    && prev_state.content_len().is_some_and(|l| l > 0)
+                {
+                    ratatui::widgets::StatefulWidget::render(
+                        scrollbar,
+                        previous_area.inner(scrollbar_margin),
+                        buf,
+                        prev_state.as_scrollbar_state_ref(),
+                    );
+                }
             }
         }
         if config.theme.column_widths[1] > 0 {

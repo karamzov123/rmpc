@@ -1132,6 +1132,7 @@ impl Pane for SearchPane {
             }
             Phase::BrowseResults => {
                 self.column_areas[BrowserArea::Previous] = inputs_area;
+                self.column_areas[BrowserArea::Current] = songs_area;
                 self.render_song_column(frame, songs_area, ctx);
                 self.inputs.render(inputs_area, frame.buffer_mut(), ctx);
             }
@@ -1280,7 +1281,7 @@ impl Pane for SearchPane {
             }
             MouseEventKind::DoubleClick => match self.phase {
                 Phase::Search => {
-                    if self.column_areas[BrowserArea::Current].contains(event.into()) {
+                    if self.column_areas[BrowserArea::Previous].contains(event.into()) {
                         match self.inputs.activate_focused(ctx) {
                             ActionResult::Search => {
                                 self.search(ctx);

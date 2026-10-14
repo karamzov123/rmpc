@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cmp::Ordering, collections::VecDeque};
+use std::{borrow::Cow, cmp::Ordering, collections::VecDeque, time::Duration};
 
 use itertools::Itertools;
 use ratatui::{
@@ -126,6 +126,7 @@ pub trait SongExt {
         ctx: &'stickers Ctx,
     ) -> Option<Line<'song>>;
 
+    #[allow(dead_code)]
     fn as_line_scrolling<'song, 'stickers: 'song>(
         &'song self,
         format: &Property<SongProperty>,
@@ -133,6 +134,17 @@ pub trait SongExt {
         tag_separator: &str,
         strategy: TagResolutionStrategy,
         scroll_speed: u64,
+        ctx: &'stickers Ctx,
+    ) -> Option<Line<'song>>;
+
+    fn as_line_bouncing<'song, 'stickers: 'song>(
+        &'song self,
+        format: &Property<SongProperty>,
+        max_len: usize,
+        tag_separator: &str,
+        strategy: TagResolutionStrategy,
+        scroll_speed: u64,
+        elapsed_on_cursor: Duration,
         ctx: &'stickers Ctx,
     ) -> Option<Line<'song>>;
 
@@ -604,6 +616,71 @@ impl SongExt for Song {
         }
 
         Some(line)
+    }
+
+    fn as_line_bouncing<'song, 'stickers: 'song>(
+        &'song self,
+        format: &Property<SongProperty>,
+        max_len: usize,
+        tag_separator: &str,
+        strategy: TagResolutionStrategy,
+        scroll_speed: u64,
+        elapsed_on_cursor: Duration,
+        ctx: &'stickers Ctx,
+    ) -> Option<Line<'song>> {
+        let line = self.as_line(format, tag_separator, strategy, ctx)?;
+        let line_len = line.width();
+
+        if line_len <= max_len || scroll_speed == 0 {
+            return Some(line);
+        }
+
+        let overflow = line_len.saturating_sub(max_len);
+        let speed = (scroll_speed as f64) * (2.0 / 3.0);
+        let scroll_secs = overflow as f64 / speed;
+        let pause_secs = scroll_secs / 2.0;
+        let cycle_secs = scroll_secs * 2.0 + pause_secs * 2.0;
+
+        let t = elapsed_on_cursor.as_secs_f64() % cycle_secs;
+        let offset = if t < scroll_secs {
+            let progress = (t / scroll_secs).min(1.0);
+            ((progress * overflow as f64).floor() as usize).min(overflow)
+        } else if t < scroll_secs + pause_secs {
+            overflow
+        } else if t < scroll_secs * 2.0 + pause_secs {
+            let t_back = t - (scroll_secs + pause_secs);
+            let progress = (t_back / scroll_secs).min(1.0);
+            let scrolled = (progress * overflow as f64).floor() as usize;
+            overflow.saturating_sub(scrolled)
+        } else {
+            0
+        };
+
+        let mut new_spans = Vec::new();
+        let mut col = 0;
+        let window_end = offset + max_len;
+
+        for span in line.spans {
+            let mut sub_content = String::new();
+            for g in span.content.graphemes(true) {
+                let gw = UnicodeWidthStr::width(g);
+                if col >= offset && col + gw <= window_end {
+                    sub_content.push_str(g);
+                }
+                col += gw;
+                if col >= window_end {
+                    break;
+                }
+            }
+            if !sub_content.is_empty() {
+                new_spans.push(Span::styled(sub_content, span.style));
+            }
+            if col >= window_end {
+                break;
+            }
+        }
+
+        Some(Line::from(new_spans))
     }
 
     fn as_line_ellipsized<'song, 'stickers: 'song>(
