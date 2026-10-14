@@ -90,11 +90,32 @@ impl<'a> Input<'a> {
 
 impl Widget for Input<'_> {
     fn render(self, area: ratatui::prelude::Rect, buf: &mut ratatui::prelude::Buffer) {
-        let label_len = self.label.chars().count() as u16;
-        let label_len = if label_len > 0 { label_len + 2 } else { 0 };
+        if area.is_empty() {
+            return;
+        }
+
+        let compact_label = if area.width < 34 {
+            if let Some(colon_pos) = self.label.find(':') {
+                let before = self.label[..colon_pos].trim_end();
+                format!("{before}:")
+            } else {
+                self.label.trim_end().to_string()
+            }
+        } else {
+            self.label.to_string()
+        };
+
+        let label_len = compact_label.chars().count() as u16;
+        let max_label_len = if area.width > 10 {
+            label_len.min(area.width.saturating_sub(6)).max(1)
+        } else {
+            label_len.min(area.width / 2).max(1)
+        };
+
+        let spacing = if self.borderless { 1 } else { self.spacing.max(1) };
         let [text_area, input_area] =
-            *Layout::horizontal([Constraint::Max(label_len), Constraint::Fill(1)])
-                .spacing(self.spacing)
+            *Layout::horizontal([Constraint::Length(max_label_len), Constraint::Fill(1)])
+                .spacing(spacing)
                 .split(area)
         else {
             return;
@@ -105,7 +126,7 @@ impl Widget for Input<'_> {
         let block_border_style =
             if self.focused { self.focused_style } else { self.unfocused_style };
 
-        let label = Paragraph::new(self.label).wrap(Wrap { trim: false }).style(self.label_style);
+        let label = Paragraph::new(compact_label).wrap(Wrap { trim: false }).style(self.label_style);
 
         let mut text =
             self.buffer_id.map_or(vec![Span::styled(self.text, self.input_style)], |id| {

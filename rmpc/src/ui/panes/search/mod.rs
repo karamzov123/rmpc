@@ -1088,9 +1088,11 @@ impl Pane for SearchPane {
         }
         let widths = &ctx.config.theme.column_widths;
         let (inputs_col, results_col) = if widths[2] == 0 {
+            let input_pct = widths[0].max(42).min(50);
+            let results_pct = 100u16.saturating_sub(input_pct);
             let cols = Layout::horizontal([
-                Constraint::Percentage(widths[0]),
-                Constraint::Percentage(widths[1]),
+                Constraint::Percentage(input_pct),
+                Constraint::Percentage(results_pct),
             ])
             .split(area);
             (cols[0], cols[1])
