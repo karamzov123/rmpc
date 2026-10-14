@@ -51,6 +51,7 @@ pub struct TagBrowserPane {
     initialized: bool,
     last_hovered_artist: Option<String>,
     artist_random_file: Option<String>,
+    artist_raw_map: HashMap<String, Vec<String>>,
 }
 
 const INIT: &str = "init";
@@ -64,6 +65,113 @@ struct SongGroup {
     songs: Vec<Song>,
 }
 
+fn strip_featuring(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    let feat_patterns = [
+        " feat. ", " feat ", " ft. ", " ft ", " featuring ",
+        " with ",
+    ];
+    for pat in feat_patterns {
+        if let Some(pos) = lower.find(pat) {
+            let primary = name[..pos].trim();
+            if !primary.is_empty() {
+                return Some(primary.to_string());
+            }
+        }
+    }
+    let bracket_patterns = [
+        " (feat. ", " (feat ", " (ft. ", " (ft ", " (featuring ",
+        " [feat. ", " [feat ", " [ft. ", " [ft ", " [featuring ",
+    ];
+    for pat in bracket_patterns {
+        if let Some(pos) = lower.find(pat) {
+            let primary = name[..pos].trim();
+            if !primary.is_empty() {
+                return Some(primary.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn split_co_artists(name: &str) -> Option<(String, String)> {
+    let lower = name.to_lowercase();
+    for delim in &[" & ", " / ", " and "] {
+        if let Some(pos) = lower.find(delim) {
+            let p1 = name[..pos].trim();
+            let p2 = name[pos + delim.len()..].trim();
+            if !p1.is_empty() && !p2.is_empty() {
+                return Some((p1.to_string(), p2.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn build_artist_mapping(raw_artists: &[String]) -> HashMap<String, Vec<String>> {
+    let mut known_base_artists: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    // Pass 1: Identify all base artists
+    for raw in raw_artists {
+        let raw_trimmed = raw.trim();
+        if raw_trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(primary) = strip_featuring(raw_trimmed) {
+            known_base_artists.entry(primary.to_lowercase()).or_insert(primary);
+        } else if split_co_artists(raw_trimmed).is_some() {
+            // Co-artists are not automatically standalone unless they appear separately
+        } else {
+            known_base_artists
+                .entry(raw_trimmed.to_lowercase())
+                .or_insert_with(|| raw_trimmed.to_string());
+        }
+    }
+
+    let mut artist_map: HashMap<String, Vec<String>> = HashMap::new();
+
+    // Pass 2: Map each raw artist to its display artist(s)
+    for raw in raw_artists {
+        let raw_trimmed = raw.trim();
+        if raw_trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(primary) = strip_featuring(raw_trimmed) {
+            let canonical = known_base_artists
+                .get(&primary.to_lowercase())
+                .cloned()
+                .unwrap_or(primary);
+            artist_map.entry(canonical).or_default().push(raw.clone());
+        } else if let Some((p1, p2)) = split_co_artists(raw_trimmed) {
+            let p1_canonical = known_base_artists.get(&p1.to_lowercase()).cloned();
+            let p2_canonical = known_base_artists.get(&p2.to_lowercase()).cloned();
+
+            if p1_canonical.is_some() || p2_canonical.is_some() {
+                if let Some(t1) = p1_canonical {
+                    artist_map.entry(t1).or_default().push(raw.clone());
+                }
+                if let Some(t2) = p2_canonical {
+                    artist_map.entry(t2).or_default().push(raw.clone());
+                }
+            } else {
+                artist_map.entry(raw_trimmed.to_string()).or_default().push(raw.clone());
+            }
+        } else {
+            artist_map.entry(raw_trimmed.to_string()).or_default().push(raw.clone());
+        }
+    }
+
+    for list in artist_map.values_mut() {
+        list.sort();
+        list.dedup();
+    }
+
+    artist_map
+}
+
 impl TagBrowserPane {
     pub fn new(tags: Vec<BrowserTagConfig>, target_pane: PaneType, ctx: &Ctx) -> Self {
         Self {
@@ -75,6 +183,7 @@ impl TagBrowserPane {
             initialized: false,
             last_hovered_artist: None,
             artist_random_file: None,
+            artist_raw_map: HashMap::new(),
         }
     }
 
@@ -476,14 +585,30 @@ impl Pane for TagBrowserPane {
             }
             (INIT, MpdQueryResult::LsInfo { data, path: _ }) => {
                 let sort_opts = ctx.config.browser_song_sort.as_ref();
+                let is_artist_tag = self
+                    .tags
+                    .first()
+                    .and_then(|t| t.group_by.first())
+                    .and_then(|g| g.first())
+                    == Some(&SongProperty::Artist);
 
-                let data = data
-                    .into_iter()
-                    .sorted_by(|a, b| StringCompare::from(sort_opts).compare(a, b))
-                    .map(DirOrSong::name_only)
-                    .collect_vec();
+                let display_items = if is_artist_tag {
+                    self.artist_raw_map = build_artist_mapping(&data);
+                    self.artist_raw_map
+                        .keys()
+                        .cloned()
+                        .sorted_by(|a, b| StringCompare::from(sort_opts).compare(a, b))
+                        .map(DirOrSong::name_only)
+                        .collect_vec()
+                } else {
+                    self.artist_raw_map.clear();
+                    data.into_iter()
+                        .sorted_by(|a, b| StringCompare::from(sort_opts).compare(a, b))
+                        .map(DirOrSong::name_only)
+                        .collect_vec()
+                };
 
-                self.stack = DirStack::new(data);
+                self.stack = DirStack::new(display_items);
                 if let Some(sel) = self.stack.current().selected() {
                     self.fetch_data(sel, ctx)?;
                 }
@@ -576,10 +701,24 @@ impl BrowserPane<DirOrSong> for TagBrowserPane {
                 }
 
                 let root_tag: Tag = self.tags[0].group_by[0][0].clone().try_into()?;
+                let raw_artists = self
+                    .artist_raw_map
+                    .get(&current)
+                    .cloned()
+                    .unwrap_or_else(|| vec![current.clone()]);
+
                 ctx.query().id(FETCH_SONGS).replace_id(FETCH_SONGS).target(target).query(
                     move |client| {
-                        let all_songs: Vec<Song> =
-                            client.find(&[Filter::new(root_tag, &current)])?;
+                        let mut all_songs: Vec<Song> = Vec::new();
+                        let mut seen_files = std::collections::HashSet::new();
+                        for raw in &raw_artists {
+                            let songs = client.find(&[Filter::new(root_tag.clone(), raw.as_str())])?;
+                            for s in songs {
+                                if seen_files.insert(s.file.clone()) {
+                                    all_songs.push(s);
+                                }
+                            }
+                        }
                         Ok(MpdQueryResult::SongsList {
                             data: all_songs,
                             path: Some(current.into()),
@@ -602,6 +741,46 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[test]
+    fn test_artist_mapping_collapsing() {
+        let raw = vec![
+            "Daft Punk".to_string(),
+            "Daft Punk feat. Panda Bear".to_string(),
+            "Daft Punk feat. Paul Williams".to_string(),
+            "Duke Ellington".to_string(),
+            "Duke Ellington & John Coltrane".to_string(),
+            "John Coltrane".to_string(),
+            "Simon & Garfunkel".to_string(),
+            "Duke Ellington & His Orchestra".to_string(),
+        ];
+
+        let map = build_artist_mapping(&raw);
+
+        // Daft Punk: all feats collapse under Daft Punk
+        assert_eq!(
+            map.get("Daft Punk").cloned().unwrap(),
+            vec![
+                "Daft Punk",
+                "Daft Punk feat. Panda Bear",
+                "Daft Punk feat. Paul Williams",
+            ]
+        );
+        assert!(!map.contains_key("Daft Punk feat. Panda Bear"));
+        assert!(!map.contains_key("Daft Punk feat. Paul Williams"));
+
+        // Duke Ellington & John Coltrane appears under BOTH artists
+        assert!(map.get("Duke Ellington").unwrap().contains(&"Duke Ellington & John Coltrane".to_string()));
+        assert!(map.get("John Coltrane").unwrap().contains(&"Duke Ellington & John Coltrane".to_string()));
+        assert!(!map.contains_key("Duke Ellington & John Coltrane"));
+
+        // Duke Ellington & His Orchestra collapses under Duke Ellington, no "His Orchestra" root artist
+        assert!(map.get("Duke Ellington").unwrap().contains(&"Duke Ellington & His Orchestra".to_string()));
+        assert!(!map.contains_key("His Orchestra"));
+
+        // Simon & Garfunkel stays as Simon & Garfunkel
+        assert!(map.contains_key("Simon & Garfunkel"));
+    }
     use crate::{
         config::{
             Config,

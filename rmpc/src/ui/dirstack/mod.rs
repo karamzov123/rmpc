@@ -30,7 +30,7 @@ use crate::{
 pub trait DirStackItem {
     fn as_path(&self) -> &str;
     fn is_file(&self) -> bool;
-    fn to_file_preview(&self, ctx: &Ctx) -> Vec<PreviewGroup>;
+    fn to_file_preview(&self, max_width: Option<usize>, ctx: &Ctx) -> Vec<PreviewGroup>;
     fn matches(&self, song_format: &[Property<SongProperty>], ctx: &Ctx, filter: &str) -> bool;
     fn to_list_item<'a>(
         &self,
@@ -110,10 +110,10 @@ impl DirStackItem for DirOrSong {
         }
     }
 
-    fn to_file_preview(&self, ctx: &Ctx) -> Vec<PreviewGroup> {
+    fn to_file_preview(&self, max_width: Option<usize>, ctx: &Ctx) -> Vec<PreviewGroup> {
         match self {
             DirOrSong::Dir { .. } => Vec::new(),
-            DirOrSong::Song(s) => s.to_file_preview(ctx),
+            DirOrSong::Song(s) => s.to_file_preview(max_width, ctx),
         }
     }
 
@@ -208,10 +208,10 @@ impl DirStackItem for Song {
         true
     }
 
-    fn to_file_preview(&self, ctx: &Ctx) -> Vec<PreviewGroup> {
+    fn to_file_preview(&self, max_width: Option<usize>, ctx: &Ctx) -> Vec<PreviewGroup> {
         let key_style = ctx.config.theme.preview_label_style;
         let group_style = ctx.config.theme.preview_metadata_group_style;
-        self.to_preview(key_style, group_style, ctx)
+        self.to_preview(key_style, group_style, max_width, ctx)
     }
 
     fn matches(&self, song_format: &[Property<SongProperty>], ctx: &Ctx, filter: &str) -> bool {
@@ -338,7 +338,7 @@ impl DirStackItem for String {
         true
     }
 
-    fn to_file_preview(&self, _ctx: &Ctx) -> Vec<PreviewGroup> {
+    fn to_file_preview(&self, _max_width: Option<usize>, _ctx: &Ctx) -> Vec<PreviewGroup> {
         Vec::new()
     }
 

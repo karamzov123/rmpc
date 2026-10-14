@@ -349,7 +349,7 @@ impl DirStackItem for DownloadId {
         true
     }
 
-    fn to_file_preview(&self, _ctx: &Ctx) -> Vec<crate::shared::mpd_query::PreviewGroup> {
+    fn to_file_preview(&self, _max_width: Option<usize>, _ctx: &Ctx) -> Vec<crate::shared::mpd_query::PreviewGroup> {
         Vec::new()
     }
 

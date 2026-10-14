@@ -1083,13 +1083,24 @@ impl Pane for SearchPane {
         area: ratatui::prelude::Rect,
         ctx: &Ctx,
     ) -> anyhow::Result<()> {
-        let widths = &ctx.config.theme.column_widths;
-        let [inputs_col, results_col] = *Layout::horizontal([
-            Constraint::Percentage(widths[0] + widths[1]),
-            Constraint::Percentage(widths[2]),
-        ])
-        .split(area) else {
+        if area.is_empty() {
             return Ok(());
+        }
+        let widths = &ctx.config.theme.column_widths;
+        let (inputs_col, results_col) = if widths[2] == 0 {
+            let cols = Layout::horizontal([
+                Constraint::Percentage(widths[0]),
+                Constraint::Percentage(widths[1]),
+            ])
+            .split(area);
+            (cols[0], cols[1])
+        } else {
+            let cols = Layout::horizontal([
+                Constraint::Percentage(widths[0] + widths[1]),
+                Constraint::Percentage(widths[2]),
+            ])
+            .split(area);
+            (cols[0], cols[1])
         };
 
         frame.render_widget(
@@ -1103,7 +1114,7 @@ impl Pane for SearchPane {
             height: inputs_col.height,
         };
 
-        let (songs_area, art_area) = if results_col.height >= 8 && results_col.width >= 8 {
+        let (songs_area, art_area) = if widths[2] > 0 && results_col.height >= 8 && results_col.width >= 8 {
             let split = Layout::vertical([
                 Constraint::Percentage(50),
                 Constraint::Percentage(50),
@@ -1281,7 +1292,7 @@ impl Pane for SearchPane {
             }
             MouseEventKind::DoubleClick => match self.phase {
                 Phase::Search => {
-                    if self.column_areas[BrowserArea::Previous].contains(event.into()) {
+                    if self.column_areas[BrowserArea::Current].contains(event.into()) {
                         match self.inputs.activate_focused(ctx) {
                             ActionResult::Search => {
                                 self.search(ctx);

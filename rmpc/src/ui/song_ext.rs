@@ -3,7 +3,8 @@ use std::{borrow::Cow, cmp::Ordering, collections::VecDeque, time::Duration};
 use itertools::Itertools;
 use ratatui::{
     style::Style,
-    text::{Line, Span},
+    text::{Line, Span, Text},
+    widgets::ListItem,
 };
 use rmpc_mpd::commands::Song;
 use unicode_segmentation::UnicodeSegmentation;
@@ -90,7 +91,13 @@ pub trait SongExt {
         opts: &'opts SortOptions,
     ) -> SongCustomSort<'song, 'opts>;
 
-    fn to_preview(&self, key_style: Style, group_style: Style, ctx: &Ctx) -> Vec<PreviewGroup>;
+    fn to_preview(
+        &self,
+        key_style: Style,
+        group_style: Style,
+        max_width: Option<usize>,
+        ctx: &Ctx,
+    ) -> Vec<PreviewGroup>;
 
     fn file_name(&self) -> Option<Cow<'_, str>>;
 
@@ -159,6 +166,147 @@ pub trait SongExt {
     ) -> Option<Line<'song>>;
 }
 
+fn format_preview_item(
+    key: &str,
+    value: &str,
+    key_style: Style,
+    max_width: Option<usize>,
+) -> ListItem<'static> {
+    let start_spacer = " ";
+    let sep = ": ";
+    let prefix = format!("{start_spacer}{key}{sep}");
+    let prefix_width = UnicodeWidthStr::width(prefix.as_str());
+
+    let Some(width) = max_width.filter(|&w| w > prefix_width + 4) else {
+        return ListItem::new(Line::from(vec![
+            Span::from(start_spacer),
+            Span::styled(key.to_string(), key_style),
+            Span::from(sep),
+            Span::from(value.to_string()),
+        ]));
+    };
+
+    let first_line_limit = width.saturating_sub(prefix_width);
+    let indent_width = if prefix_width <= width.saturating_sub(8) {
+        prefix_width
+    } else {
+        4
+    };
+    let indent_str = " ".repeat(indent_width);
+    let subsequent_limit = width.saturating_sub(indent_width);
+
+    // Split value into tokens that can break on spaces or after slashes
+    let mut tokens: Vec<(String, bool)> = Vec::new();
+    let words = value.split(' ').collect::<Vec<_>>();
+    let num_words = words.len();
+    for (i, &word) in words.iter().enumerate() {
+        let is_last_word = i + 1 == num_words;
+        if word.contains('/') {
+            let mut rem = word;
+            while let Some(slash_pos) = rem.find('/') {
+                let part = &rem[..=slash_pos];
+                rem = &rem[slash_pos + 1..];
+                let is_end_of_word = rem.is_empty();
+                tokens.push((part.to_string(), is_end_of_word && !is_last_word));
+            }
+            if !rem.is_empty() {
+                tokens.push((rem.to_string(), !is_last_word));
+            }
+        } else {
+            tokens.push((word.to_string(), !is_last_word));
+        }
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current_line = String::new();
+    let mut is_first_line = true;
+    let mut current_limit = first_line_limit;
+
+    for (token, has_space_after) in tokens {
+        let token_width = UnicodeWidthStr::width(token.as_str());
+        let current_width = UnicodeWidthStr::width(current_line.as_str());
+
+        if !current_line.is_empty() && current_width + token_width > current_limit {
+            if is_first_line {
+                lines.push(Line::from(vec![
+                    Span::from(start_spacer),
+                    Span::styled(key.to_string(), key_style),
+                    Span::from(sep),
+                    Span::from(std::mem::take(&mut current_line)),
+                ]));
+                is_first_line = false;
+                current_limit = subsequent_limit;
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(indent_str.clone()),
+                    Span::from(std::mem::take(&mut current_line)),
+                ]));
+            }
+        }
+
+        let mut rem_token = token.as_str();
+        while UnicodeWidthStr::width(rem_token) > current_limit && current_limit > 0 {
+            let mut fit_len = 0;
+            for (idx, ch) in rem_token.char_indices() {
+                let w = UnicodeWidthStr::width(&rem_token[..idx + ch.len_utf8()]);
+                if w > current_limit {
+                    break;
+                }
+                fit_len = idx + ch.len_utf8();
+            }
+            if fit_len == 0 {
+                if let Some(ch) = rem_token.chars().next() {
+                    fit_len = ch.len_utf8();
+                }
+            }
+            let chunk = &rem_token[..fit_len];
+            rem_token = &rem_token[fit_len..];
+
+            if is_first_line {
+                lines.push(Line::from(vec![
+                    Span::from(start_spacer),
+                    Span::styled(key.to_string(), key_style),
+                    Span::from(sep),
+                    Span::from(chunk.to_string()),
+                ]));
+                is_first_line = false;
+                current_limit = subsequent_limit;
+            } else {
+                lines.push(Line::from(vec![
+                    Span::from(indent_str.clone()),
+                    Span::from(chunk.to_string()),
+                ]));
+            }
+        }
+
+        if !rem_token.is_empty() {
+            current_line.push_str(rem_token);
+        }
+        if has_space_after {
+            current_line.push(' ');
+        }
+    }
+
+    if !current_line.is_empty() || is_first_line {
+        let final_text = current_line.trim_end().to_string();
+        if is_first_line {
+            lines.push(Line::from(vec![
+                Span::from(start_spacer),
+                Span::styled(key.to_string(), key_style),
+                Span::from(sep),
+                Span::from(final_text),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::from(indent_str),
+                Span::from(final_text),
+            ]));
+        }
+    }
+
+    ListItem::new(Text::from(lines))
+}
+
 impl SongExt for Song {
     fn with_custom_sort<'song, 'opts>(
         &'song self,
@@ -167,105 +315,61 @@ impl SongExt for Song {
         SongCustomSort { song: self, opts }
     }
 
-    fn to_preview(&self, key_style: Style, group_style: Style, ctx: &Ctx) -> Vec<PreviewGroup> {
-        let separator = Span::from(": ");
-        let start_of_line_spacer = Span::from(" ");
-
+    fn to_preview(
+        &self,
+        key_style: Style,
+        group_style: Style,
+        max_width: Option<usize>,
+        ctx: &Ctx,
+    ) -> Vec<PreviewGroup> {
         let mut info_group = PreviewGroup::new(Some(" --- [Info]"), Some(group_style));
 
-        let file = Line::from(vec![
-            start_of_line_spacer.clone(),
-            Span::styled("File", key_style),
-            separator.clone(),
-            Span::from(self.file.clone()),
-        ]);
-        info_group.push(file.into());
+        info_group.push(format_preview_item("File", &self.file, key_style, max_width));
 
         if let Some(file_name) = self.file_name() {
-            info_group.push(
-                Line::from(vec![
-                    start_of_line_spacer.clone(),
-                    Span::styled("Filename", key_style),
-                    separator.clone(),
-                    Span::from(file_name.into_owned()),
-                ])
-                .into(),
-            );
+            info_group.push(format_preview_item("Filename", &file_name, key_style, max_width));
         }
 
         if let Some(title) = self.metadata.get("title") {
             title.for_each(|item| {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Title", key_style),
-                        separator.clone(),
-                        Span::from(item.to_owned()),
-                    ])
-                    .into(),
-                );
+                info_group.push(format_preview_item("Title", item, key_style, max_width));
             });
         }
         if let Some(artist) = self.metadata.get("artist") {
             artist.for_each(|item| {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Artist", key_style),
-                        separator.clone(),
-                        Span::from(item.to_owned()),
-                    ])
-                    .into(),
-                );
+                info_group.push(format_preview_item("Artist", item, key_style, max_width));
             });
         }
 
         if let Some(album) = self.metadata.get("album") {
             album.for_each(|item| {
-                info_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled("Album", key_style),
-                        separator.clone(),
-                        Span::from(item.to_owned()),
-                    ])
-                    .into(),
-                );
+                info_group.push(format_preview_item("Album", item, key_style, max_width));
             });
         }
 
         if let Some(duration) = &self.duration {
-            info_group.push(
-                Line::from(vec![
-                    start_of_line_spacer.clone(),
-                    Span::styled("Duration", key_style),
-                    separator.clone(),
-                    Span::from(ctx.config.duration_format.format(duration)),
-                ])
-                .into(),
-            );
+            info_group.push(format_preview_item(
+                "Duration",
+                &ctx.config.duration_format.format(duration),
+                key_style,
+                max_width,
+            ));
         }
 
-        info_group.push(
-            Line::from(vec![
-                start_of_line_spacer.clone(),
-                Span::styled("Last Modified", key_style),
-                separator.clone(),
-                Span::from(self.last_modified.to_string()),
-            ])
-            .into(),
-        );
+        info_group.push(format_preview_item(
+            "Last Modified",
+            &self.last_modified.to_string(),
+            key_style,
+            max_width,
+        ));
 
         if let Some(added) = &self.added {
-            info_group.push(
-                Line::from(vec![
-                    start_of_line_spacer.clone(),
-                    Span::styled("Added", key_style),
-                    separator.clone(),
-                    Span::from(added.to_string()),
-                ])
-                .into(),
-            );
+            info_group.push(format_preview_item(
+                "Added",
+                &added.to_string(),
+                key_style,
+                max_width,
+            ));
         }
 
         let mut tags_group = PreviewGroup::new(Some(" --- [Tags]"), Some(group_style));
@@ -276,15 +380,7 @@ impl SongExt for Song {
             .sorted_by_key(|(key, _)| *key)
         {
             v.for_each(|item| {
-                tags_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled(k.clone(), key_style),
-                        separator.clone(),
-                        Span::from(item.to_owned()),
-                    ])
-                    .into(),
-                );
+                tags_group.push(format_preview_item(k, item, key_style, max_width));
             });
         }
 
@@ -297,15 +393,7 @@ impl SongExt for Song {
             let mut stickers_group = PreviewGroup::new(Some(" --- [Stickers]"), Some(group_style));
 
             for (k, v) in stickers.iter().sorted_by_key(|(key, _)| *key) {
-                stickers_group.push(
-                    Line::from(vec![
-                        start_of_line_spacer.clone(),
-                        Span::styled(k.clone(), key_style),
-                        separator.clone(),
-                        Span::from(v.to_owned()),
-                    ])
-                    .into(),
-                );
+                stickers_group.push(format_preview_item(k, v, key_style, max_width));
             }
 
             result.push(stickers_group);

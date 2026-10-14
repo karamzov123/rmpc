@@ -6,6 +6,23 @@ heavily inspired by [ncmpcpp](https://github.com/ncmpcpp/ncmpcpp) and
 
 ![preview](assets/preview.png)
 
+## Fork Features & Enhancements
+
+This fork introduces enhancements to the user interface, library navigation, and companion workflow scripts:
+
+- **Bouncing text scroll with custom pauses**: Long titles and tags bounce smoothly between start and end boundaries, resetting scroll progress whenever moving between tracks and pausing gracefully at edges.
+- **Wall-clock paused playback scrolling**: Scrolling labels in property panes and status lines remain animated even when playback is paused or stopped.
+- **Adaptive 2-column & 3-column layouts**:
+  - The search pane automatically detects 2-column mini mode (`browser_column_widths[2] == 0`) and allocates inputs and results cleanly across the available columns.
+  - Search and album browser panes start flush against the far-left border.
+- **Dynamic album folder icon collapse**: Navigating inside an album collapses the outer artist column down into a compact album folder icon, granting equal 50/50 space to tracks and metadata.
+- **Clean metadata text wrapping**: Long metadata fields (paths, titles, tags, and stickers) in preview panes wrap cleanly onto multiple indented lines rather than clipping.
+- **Collaborative artist & featuring grouping**:
+  - Featured artists (`feat.`, `ft.`, `featuring`) automatically collapse under the primary artist in the album view.
+  - Multi-artist collaborative albums (e.g. `Duke Ellington & John Coltrane`) appear under both artists if each has recordings in the library.
+- **Hover album art preview**: Dynamic cover art previews when hovering artists and search results.
+- **Companion scripts**: Helper scripts under `scripts/` for dynamic theme swapping on resize, lyrics fetching, live playback lyric stamping (`lrc-stamper.py`), and play count tracking.
+
 ## Get started
 
 Description, configuration and installation methods can be found on [the rmpc website](https://rmpc.mierak.dev)

@@ -139,7 +139,7 @@ where
             let result = if let Some(current) = state.current().selected()
                 && current.is_file()
             {
-                let previews = current.to_file_preview(ctx);
+                let previews = current.to_file_preview(Some(preview_list_area.width as usize), ctx);
                 let mut result = Vec::new();
                 for group in previews {
                     if let Some(name) = group.name {
